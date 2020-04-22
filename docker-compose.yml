@@ -1,0 +1,269 @@
+version: '3.5'
+services:
+ zabbix-server:
+  image: zabbix/zabbix-server-pgsql:ubuntu-4.4-latest
+  ports:
+   - "10051:10051"
+  volumes:
+   - ./zbx_env/usr/lib/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
+   - ./zbx_env/usr/lib/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
+   - ./zbx_env/var/lib/zabbix/export:/var/lib/zabbix/export:rw
+   - ./zbx_env/var/lib/zabbix/modules:/var/lib/zabbix/modules:ro
+   - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+   - ./zbx_env/var/lib/zabbix/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+   - ./zbx_env/var/lib/zabbix/mibs:/var/lib/zabbix/mibs:ro
+   - ./zbx_env/var/lib/zabbix/snmptraps:/var/lib/zabbix/snmptraps:ro
+  links:
+   - postgres-server:postgres-server
+  ulimits:
+   nproc: 65535
+   nofile:
+    soft: 20000
+    hard: 40000
+  deploy:
+   resources:
+    limits:
+      cpus: '0.70'
+      memory: 1G
+    reservations:
+      cpus: '0.5'
+      memory: 512M
+  env_file:
+   - .env_db_pgsql
+   - .env_srv
+  secrets:
+   - POSTGRES_USER
+   - POSTGRES_PASSWORD
+  user: root
+  depends_on:
+   - postgres-server
+  networks:
+   zbx_net_backend:
+     aliases:
+      - zabbix-server
+      - zabbix-server-pgsql
+      - zabbix-server-ubuntu-pgsql
+      - zabbix-server-pgsql-ubuntu
+   zbx_net_frontend:
+#  devices:
+#   - "/dev/ttyUSB0:/dev/ttyUSB0"
+  stop_grace_period: 30s
+  sysctls:
+   - net.ipv4.ip_local_port_range=1024 65000
+   - net.ipv4.conf.all.accept_redirects=0
+   - net.ipv4.conf.all.secure_redirects=0
+   - net.ipv4.conf.all.send_redirects=0
+  labels:
+   com.zabbix.description: "Zabbix server with PostgreSQL database support"
+   com.zabbix.company: "Zabbix LLC"
+   com.zabbix.component: "zabbix-server"
+   com.zabbix.dbtype: "pgsql"
+   com.zabbix.os: "ubuntu"
+
+ zabbix-web-nginx-pgsql:
+  image: zabbix/zabbix-web-nginx-pgsql:ubuntu-4.4-latest
+  ports:
+   - "8081:80"
+   - "8443:443"
+  links:
+   - postgres-server:postgres-server
+   - zabbix-server:zabbix-server
+  volumes:
+   - ./zbx_env/etc/ssl/nginx:/etc/ssl/nginx:ro
+  deploy:
+   resources:
+    limits:
+      cpus: '0.70'
+      memory: 512M
+    reservations:
+      cpus: '0.5'
+      memory: 256M
+  env_file:
+   - .env_db_pgsql
+   - .env_web
+  secrets:
+   - POSTGRES_USER
+   - POSTGRES_PASSWORD
+  user: root
+  depends_on:
+   - postgres-server
+   - zabbix-server
+  healthcheck:
+   test: ["CMD", "curl", "-f", "http://localhost"]
+   interval: 10s
+   timeout: 5s
+   retries: 3
+   start_period: 30s
+  networks:
+   zbx_net_backend:
+    aliases:
+     - zabbix-web-nginx-pgsql
+     - zabbix-web-nginx-ubuntu-pgsql
+     - zabbix-web-nginx-pgsql-ubuntu
+   zbx_net_frontend:
+  stop_grace_period: 10s
+  sysctls:
+   - net.core.somaxconn=65535
+  labels:
+   com.zabbix.description: "Zabbix frontend on Nginx web-server with PostgreSQL database support"
+   com.zabbix.company: "Zabbix LLC"
+   com.zabbix.component: "zabbix-frontend"
+   com.zabbix.webserver: "nginx"
+   com.zabbix.dbtype: "pgsql"
+   com.zabbix.os: "ubuntu"
+
+ zabbix-agent:
+  image: zabbix/zabbix-agent:ubuntu-4.4-latest
+  ports:
+   - "10050:10050"
+  volumes:
+   - ./zbx_env/etc/zabbix/zabbix_agentd.d:/etc/zabbix/zabbix_agentd.d:ro
+   - ./zbx_env/var/lib/zabbix/modules:/var/lib/zabbix/modules:ro
+   - ./zbx_env/var/lib/zabbix/enc:/var/lib/zabbix/enc:ro
+   - ./zbx_env/var/lib/zabbix/ssh_keys:/var/lib/zabbix/ssh_keys:ro
+  links:
+   - zabbix-server:zabbix-server
+  deploy:
+   resources:
+    limits:
+      cpus: '0.2'
+      memory: 128M
+    reservations:
+      cpus: '0.1'
+      memory: 64M
+   mode: global
+  env_file:
+   - .env_agent
+  user: root
+  privileged: true
+  pid: "host"
+  networks:
+   zbx_net_backend:
+    aliases:
+     - zabbix-agent
+     - zabbix-agent-passive
+     - zabbix-agent-ubuntu
+  stop_grace_period: 5s
+  labels:
+   com.zabbix.description: "Zabbix agent"
+   com.zabbix.company: "Zabbix LLC"
+   com.zabbix.component: "zabbix-agentd"
+   com.zabbix.os: "ubuntu"
+
+
+ postgres-server:
+  image: postgres:latest
+  volumes:
+   - ./zbx_env/var/lib/postgresql/data:/var/lib/postgresql/data:rw
+  env_file:
+   - .env_db_pgsql
+  secrets:
+   - POSTGRES_USER
+   - POSTGRES_PASSWORD
+  user: root
+  stop_grace_period: 1m
+  networks:
+   zbx_net_backend:
+    aliases:
+     - postgres-server
+     - pgsql-server
+     - pgsql-database
+
+ zookeeper:
+  image: confluentinc/cp-zookeeper:5.4.1
+  hostname: zookeeper
+  container_name: zookeeper
+  networks:
+   kafka_net_backend:
+  environment:
+   ZOOKEEPER_CLIENT_PORT: 2181
+   ZOOKEEPER_TICK_TIME: 2000
+
+ kafka:
+  image: confluentinc/cp-server:5.4.1
+  hostname: broker
+  container_name: broker
+  networks:
+    kafka_net_backend:
+    kafka_net_frontend:
+  links:
+   - zookeeper
+  ports:
+    - "9092:9092"
+  environment:
+    KAFKA_BROKER_ID: 1
+    KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+    KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+    KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+    CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+    CONFLUENT_METRICS_REPORTER_ZOOKEEPER_CONNECT: zookeeper:2181
+    CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+    CONFLUENT_METRICS_ENABLE: 'true'
+    CONFLUENT_SUPPORT_CUSTOMER_ID: 'anonymous'
+
+ migrator:
+  build:
+    context: .
+    args:
+      BUILD_DATE: $BUILD_DATE
+      BUILD_VERSION: $BUILD_VERSION
+  container_name: migrator
+  links:
+   - kafka
+   - zabbix-web-nginx-pgsql
+  networks:
+    zbx_net_frontend:
+    kafka_net_frontend:
+
+
+ db_data_pgsql:
+  image: busybox
+  volumes:
+   - ./zbx_env/var/lib/postgresql/data:/var/lib/postgresql/data:rw
+
+
+networks:
+  zbx_net_frontend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.238.0/24
+  zbx_net_backend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    internal: true
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.239.0/24
+  kafka_net_frontend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.240.0/24
+  kafka_net_backend:
+    driver: bridge
+    driver_opts:
+      com.docker.network.enable_ipv6: "false"
+    internal: true
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.241.0/24
+
+secrets:
+  POSTGRES_USER:
+    file: ./.POSTGRES_USER
+  POSTGRES_PASSWORD:
+    file: ./.POSTGRES_PASSWORD
