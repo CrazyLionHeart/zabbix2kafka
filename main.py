@@ -6,7 +6,6 @@ from os import getenv
 import json
 import logging
 import sys
-from pprint import pformat, pprint
 
 from kafka import KafkaProducer, KafkaConsumer
 from kafka.errors import KafkaError
@@ -42,6 +41,8 @@ def config_logging():
 
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(funcName)s:%(lineno)d | %(message)s")
+
+    root_logger.setFormatter(formatter)
 
     if root_logger.getEffectiveLevel() == logging.DEBUG:
         http_client.HTTPConnection.debuglevel = 1
