@@ -6,7 +6,6 @@ from os import getenv
 import json
 import logging
 import sys
-import time
 import threading
 
 
@@ -47,8 +46,6 @@ def config_logging():
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
-
-    kafka_logger = logging.getLogger('kafka').addHandler(NullHandler())
 
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(name)s %(filename)s:%(funcName)s:%(lineno)d | %(message)s")
