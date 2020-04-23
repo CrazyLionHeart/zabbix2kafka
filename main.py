@@ -54,14 +54,9 @@ def config_logging():
     root_logger.addHandler(zabbix_handler)
     return root_logger
 
-def to_timestamp(time, multiper=None):
-    if multiper:
-        return datetime.fromtimestamp(time/multiper)
-    else:
-        return datetime.fromtimestamp(time)
 
 def get_latest_timestamp(kafka_topic):
-    latest_timestamp = to_timestamp(0)
+    latest_timestamp = 0
 
     consumer = KafkaConsumer(kafka_topic,
                              api_version=(1, 0, 0),
@@ -81,7 +76,7 @@ def get_latest_timestamp(kafka_topic):
 
         if len(msgs) > 0:
             record = msgs[-1]
-            latest_timestamp = to_timestamp(record.timestamp, 1000.0)
+            latest_timestamp = record.timestamp/1000.0
     return latest_timestamp
 
 
@@ -125,41 +120,65 @@ if __name__ == "__main__":
         log.info("Latest timestamp from kafka: %s" % latest_timestamp)
 
         # Get all monitored hosts
-        hosts = zapi.host.get(monitored_hosts=1, output='extend')
+        hosts = zapi.host.get(monitored_hosts=1, output=["hostid"])
 
         hosts_chunked = chunks(hosts, 10)
 
-        items = []
+        sended = 0
 
         for hosts_chunk in hosts_chunked:
             h_ids = list(h['hostid'] for h in hosts_chunk)
-            output = ["itemid", "hostid", "lastvalue", "lastclock", "name",
-                      "value_type", "key_"]
 
-            zbx_filter = {
-                          # "value_type": [0, 3],
-                          # "key_": download_items_keys,
-                          # "name": download_items_names
-                          }
+            items = zapi.item.get({
+                "hostids": h_ids,
+                "monitored": True,
+                "output": ["itemid", "hostid", "name"],
+            })
 
-            items += zapi.item.get({"hostids": h_ids, "monitored": True,
-                                    "output": output, "filter": zbx_filter})
+            items_chunked = chunks(items, 10)
 
-        # send only updated metric values
-        filtered_items = filter(lambda item:
-                                to_timestamp(int(item['lastclock'])) >= latest_timestamp,
-                                items
-                                )
-        sended = 0
-        for item in filtered_items:
-            log.debug(item)
-            producer.send(kafka_topic, item)
-            sended += 1
+            for items_chunk in items_chunked:
 
-        # # block until all async messages are sent
-        producer.flush()
+                i_ids = list(i['itemid'] for i in items_chunk)
+
+                current_history = zapi.history.get(
+                    history=0,
+                    time_from=int(latest_timestamp),
+                    # time_till=int(latest_timestamp + 60),
+                    hostids=h_ids,
+                    itemids=i_ids,
+                    sortfield="clock",
+                    sortorder="DESC",
+                    output=["itemid", "value", "clock"]
+                )
+
+                log.debug(current_history)
+
+                for h_item in current_history:
+                    host_id = [h['hostid'] for h in items_chunk
+                               if h['itemid'] == h_item['itemid']][-1]
+
+                    name = [h['name'] for h in items_chunk
+                            if h['itemid'] == h_item['itemid']][-1]
+
+                    result = {
+                        "host_id": host_id,
+                        "item_it": h_item['itemid'],
+                        "value": h_item['value'],
+                        "clock": h_item['clock'],
+                        "metric_name": name
+                    }
+
+                    log.debug(result)
+                    producer.send(kafka_topic, result)
+                    sended += 1
+
+            # # block until all async messages are sent
+            producer.flush()
+
 
         log.info("Pushed %s metrics" % sended)
+        log.info("Last item time: %s" % result['clock'])
 
     except KafkaError:
         # Decide what to do if produce request failed...
