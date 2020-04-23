@@ -6,11 +6,15 @@ from os import getenv
 import json
 import logging
 import sys
+import time
+import threading
+
 
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
 
 from pyzabbix.api import ZabbixAPI
+
 
 try:
     import http.client as http_client
@@ -25,6 +29,11 @@ client_id = getenv("HOSTNAME")
 zabbix_host = getenv("ZBX_HOST")
 zabbix_login = getenv("ZBX_USER")
 zabbix_passwd = getenv("ZBX_PASSWD")
+WAIT_TIME_SECONDS = getenv("WAIT_TIME_SECONDS", 60)
+
+class NullHandler(logging.Handler):
+    def emit(self, record):
+        pass
 
 
 def config_logging():
@@ -39,8 +48,11 @@ def config_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
+    kafka_logger = logging.getLogger('kafka').addHandler(NullHandler())
+
     formatter = logging.Formatter(
-        "[%(asctime)s][%(levelname)s] %(funcName)s:%(lineno)d | %(message)s")
+        "[%(asctime)s][%(levelname)s] %(name)s %(filename)s:%(funcName)s:%(lineno)d | %(message)s")
+
 
     if root_logger.getEffectiveLevel() == logging.DEBUG:
         http_client.HTTPConnection.debuglevel = 1
@@ -53,62 +65,50 @@ def config_logging():
     return root_logger
 
 
-def get_latest_timestamp(kafka_topic):
-    latest_timestamp = 0
-
-    consumer = KafkaConsumer(kafka_topic,
-                             api_version=(1, 0, 0),
-                             value_deserializer=lambda m: json.loads(
-                                 m.decode('utf-8')),
-                             bootstrap_servers=bootstrap_servers)
-
-    topic_partition = TopicPartition(topic=kafka_topic, partition=0)
-    end_offset = consumer.end_offsets([topic_partition])[topic_partition]
-
-    if end_offset > 0:
-        # partition  assigned after poll, and we could seek
-        consumer.poll(5, 1)
-        consumer.seek(topic_partition, end_offset - 1)
-        message = consumer.poll(10000, 500)
-        msgs = message[topic_partition]
-
-        if len(msgs) > 0:
-            record = msgs[-1]
-            latest_timestamp = record.timestamp/1000.0
-    return latest_timestamp
-
-
 def chunks(lst, n):
     """Yield successive n-sized chunks from lst."""
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
+def transfer_data():
 
-if __name__ == "__main__":
+    def get_latest_timestamp(kafka_topic):
+        latest_timestamp = 0
 
-    log = config_logging()
+        topic_partition = TopicPartition(topic=kafka_topic, partition=0)
+        end_offset = consumer.end_offsets([topic_partition])[topic_partition]
 
-    if kafka_endpoint:
-        bootstrap_servers = kafka_endpoint.split(',')
-        producer = KafkaProducer(bootstrap_servers=bootstrap_servers,
-                                 client_id=client_id,
-                                 retries=-1,
-                                 acks=1,
-                                 api_version=(1, 0, 0),
-                                 compression_type='lz4',
-                                 value_serializer=lambda m: json.dumps(
-                                     m).encode('utf-8')
-                                 )
-    else:
-        raise Exception(
-            "Kafka brokers does not set KAFKA_BROKERS: %s" % kafka_endpoint)
+        if end_offset > 0:
+            # partition  assigned after poll, and we could seek
+            consumer.poll(5, 1)
+            consumer.seek(topic_partition, end_offset - 1)
+            message = consumer.poll(10000, 500)
+            msgs = message[topic_partition]
 
-    if not kafka_topic:
-        raise Exception(
-            "Kafka brokers does not set KAFKA_BROKERS: %s" % kafka_endpoint)
+            if len(msgs) > 0:
+                record = msgs[-1]
+                latest_timestamp = record.timestamp/1000.0
+        return latest_timestamp
 
-    # Block for 'synchronous' sends
     try:
+        producer = KafkaProducer(bootstrap_servers=bootstrap_servers,
+                     client_id=client_id,
+                     retries=-1,
+                     acks=1,
+                     request_timeout_ms=600000,
+                     api_version=(1, 0, 0),
+                     compression_type='lz4',
+                     value_serializer=lambda m: json.dumps(
+                         m).encode('utf-8')
+                     )
+
+        consumer = KafkaConsumer(kafka_topic,
+                             api_version=(1, 0, 0),
+                             value_deserializer=lambda m: json.loads(
+                                 m.decode('utf-8')),
+                             session_timeout_ms=600000,
+                             bootstrap_servers=bootstrap_servers)
+
         zapi = ZabbixAPI(url="%s/api_jsonrpc.php" % zabbix_host,
                          user=zabbix_login, password=zabbix_passwd)
         log.info("Zabbix API version: " + str(zapi.api_version()))
@@ -171,8 +171,8 @@ if __name__ == "__main__":
                     producer.send(kafka_topic, result)
                     sended += 1
 
-            # # block until all async messages are sent
-            producer.flush()
+            # block until all async messages are sent
+            # producer.flush()
 
 
         log.info("Pushed %s metrics" % sended)
@@ -182,3 +182,27 @@ if __name__ == "__main__":
         # Decide what to do if produce request failed...
         log.exception()
         pass
+
+
+
+if __name__ == "__main__":
+
+    log = config_logging()
+
+    if kafka_endpoint:
+        bootstrap_servers = kafka_endpoint.split(',')
+    else:
+        raise Exception(
+            "Kafka brokers does not set KAFKA_BROKERS: %s" % kafka_endpoint)
+
+    if not kafka_topic:
+        raise Exception(
+            "Kafka brokers does not set KAFKA_BROKERS: %s" % kafka_endpoint)
+
+    ticker = threading.Event()
+    while not ticker.wait(WAIT_TIME_SECONDS):
+        transfer_data()
+
+
+
+
