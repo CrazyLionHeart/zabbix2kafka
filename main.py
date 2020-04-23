@@ -7,8 +7,6 @@ import json
 import logging
 import sys
 
-from datetime import datetime
-
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
 
