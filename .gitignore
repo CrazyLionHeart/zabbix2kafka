@@ -130,3 +130,5 @@ dmypy.json
 
 # Zabbix docker env
 zbx_env/
+kafka
+zk_*
