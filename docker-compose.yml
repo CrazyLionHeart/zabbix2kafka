@@ -162,6 +162,11 @@ services:
    - POSTGRES_PASSWORD
   user: root
   stop_grace_period: 1m
+  healthcheck:
+   test: ["CMD-SHELL", "pg_isready -U postgres"]
+   interval: 10s
+   timeout: 5s
+   retries: 5
   networks:
    zbx_net_backend:
     aliases:
@@ -175,6 +180,11 @@ services:
   container_name: zookeeper
   networks:
    kafka_net_backend:
+  healthcheck:
+   test: ["CMD-SHELL", "echo ruok | nc -w 2 zookeeper 2181"]
+   interval: 5s
+   timeout: 10s
+   retries: 3
   env_file:
    - .env_zookeeper
 
@@ -185,12 +195,38 @@ services:
   networks:
     kafka_net_backend:
     kafka_net_frontend:
+  depends_on:
+   - zookeeper
   volumes:
    - ./kafka:/var/lib/kafka:rw
+   - up-flag:/data
   links:
    - zookeeper
   ports:
     - "9092:9092"
+  command: 
+    - bash 
+    - -c 
+    - |
+      rm -f /data/kafka-is-up
+      # Launch Kafka
+      /etc/confluent/docker/run &
+      # Wait for Kafka to start and then create a file to 
+      # indicate that it's listening
+      echo "Waiting for Kafka to start listening on 9092 ⏳"
+      nc -vz localhost 9092
+      is_up=$$?
+      while [ $$is_up -ne 0 ] ; do 
+        echo -e $$(date) $$(nc -z localhost 9092)
+        nc -vz localhost 9092
+        is_up=$$?
+        sleep 5 
+      done
+      echo "Kakfa is now listening! :-)"
+      touch /data/kafka-is-up
+      sleep infinity
+  healthcheck:
+   test: ["CMD", "bash", "-c", "unset" , "JMX_PORT" ,";" ,"kafka-topics.sh","--zookeeper","zookeeper:2181","--list"]
   env_file:
    - .env_kafka
 
@@ -207,12 +243,30 @@ services:
   networks:
    zbx_net_backend:
    kafka_net_backend:
+  depends_on:
+   - kafka
+   - zabbix-web-nginx-pgsql
+  entrypoint: /bin/bash -c "/bin/bash -c \"$${@}\""
+  command: 
+   - bash 
+   - -c 
+   - |
+     echo "Waiting for flag that Kafka is up… ⏳"
+     until [ -f /data/kafka-is-up ]
+     do
+         echo -e $$(date) ": Waiting for flag that Kafka is up… ⏳"
+         sleep 5
+     done
+     echo -e $$(date) ": \o/ Got the flag that Kafka is up!"
+     python main.py
   environment:
    KAFKA_BROKERS: broker:9092
    KAFKA_TOPIC: zabbix
    ZBX_HOST: http://zabbix-web-nginx-pgsql
    ZBX_USER: Admin
    ZBX_PASSWD: zabbix
+  volumes:
+   - up-flag:/data
 
 
 
@@ -263,3 +317,6 @@ secrets:
     file: ./.POSTGRES_USER
   POSTGRES_PASSWORD:
     file: ./.POSTGRES_PASSWORD
+
+volumes:
+ up-flag: {}
