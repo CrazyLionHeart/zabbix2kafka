@@ -29,6 +29,13 @@ zabbix_host = getenv("ZBX_HOST")
 zabbix_login = getenv("ZBX_USER")
 zabbix_passwd = getenv("ZBX_PASSWD")
 WAIT_TIME_SECONDS = getenv("WAIT_TIME_SECONDS", 60)
+security_protocol=getenv("KAFKA_PROTOCOL", "PLAINTEXT")
+ssl_check_hostname=getnev("KAFKA_CHECK_HOSTNAME", False),
+ssl_cafile=getenv("KAFKA_SSL_CA")
+ssl_certfile=getnev("KAFKA_SSL_CERT")
+ssl_keyfile=getnev("KAFKA_SSL_KEY")
+ssl_password=getenv("KAFKA_SSL_PASSWD")
+
 
 class NullHandler(logging.Handler):
     def emit(self, record):
@@ -50,7 +57,6 @@ def config_logging():
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(name)s %(filename)s:%(funcName)s:%(lineno)d | %(message)s")
 
-
     if root_logger.getEffectiveLevel() == logging.DEBUG:
         http_client.HTTPConnection.debuglevel = 1
     else:
@@ -67,12 +73,16 @@ def chunks(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
+
 def transfer_data():
 
     def get_latest_timestamp(kafka_topic):
         latest_timestamp = 0
 
-        topic_partition = TopicPartition(topic=kafka_topic, partition=0)
+        topic_partition = TopicPartition(
+            topic=kafka_topic,
+            partition=0,
+        )
         end_offset = consumer.end_offsets([topic_partition])[topic_partition]
 
         if end_offset > 0:
@@ -88,26 +98,43 @@ def transfer_data():
         return latest_timestamp
 
     try:
-        producer = KafkaProducer(bootstrap_servers=bootstrap_servers,
-                     client_id=client_id,
-                     retries=-1,
-                     acks=1,
-                     request_timeout_ms=600000,
-                     api_version=(1, 0, 0),
-                     compression_type='lz4',
-                     value_serializer=lambda m: json.dumps(
-                         m).encode('utf-8')
-                     )
+        producer = KafkaProducer(
+            bootstrap_servers=bootstrap_servers,
+            client_id=client_id,
+            retries=-1,
+            acks=1,
+            request_timeout_ms=600000,
+            api_version=(1, 0, 0),
+            compression_type='lz4',
+            security_protocol=security_protocol,
+            ssl_check_hostname=ssl_check_hostname,
+            ssl_cafile=ssl_cafile,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            ssl_password=ssl_password,
+            value_serializer=lambda m: json.dumps(
+                m).encode('utf-8')
+        )
 
-        consumer = KafkaConsumer(kafka_topic,
-                             api_version=(1, 0, 0),
-                             value_deserializer=lambda m: json.loads(
-                                 m.decode('utf-8')),
-                             session_timeout_ms=600000,
-                             bootstrap_servers=bootstrap_servers)
+        consumer = KafkaConsumer(
+            kafka_topic,
+            api_version=(1, 0, 0),
+            value_deserializer=lambda m: json.loads(
+                m.decode('utf-8')),
+            session_timeout_ms=600000,
+            security_protocol=security_protocol,
+            ssl_check_hostname=ssl_check_hostname,
+            ssl_cafile=ssl_cafile,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            ssl_password=ssl_password,
+            bootstrap_servers=bootstrap_servers)
 
-        zapi = ZabbixAPI(url="%s/api_jsonrpc.php" % zabbix_host,
-                         user=zabbix_login, password=zabbix_passwd)
+        zapi = ZabbixAPI(
+            url="%s/api_jsonrpc.php" % zabbix_host,
+            user=zabbix_login,
+            password=zabbix_passwd,
+        )
         log.info("Zabbix API version: " + str(zapi.api_version()))
 
         latest_timestamp = get_latest_timestamp(kafka_topic)
@@ -115,7 +142,13 @@ def transfer_data():
         log.info("Latest timestamp from kafka: %s" % latest_timestamp)
 
         # Get all monitored hosts
-        hosts = zapi.host.get(monitored_hosts=1, output=["hostid"])
+        hosts = zapi.host.get(
+            monitored_hosts=1,
+            output=[
+                "hostid",
+                "groups",
+                "name"]
+        )
 
         hosts_chunked = chunks(hosts, 10)
 
@@ -127,7 +160,11 @@ def transfer_data():
             items = zapi.item.get({
                 "hostids": h_ids,
                 "monitored": True,
-                "output": ["itemid", "hostid", "name"],
+                "output": [
+                    "itemid",
+                    "hostid",
+                    "name",
+                ],
             })
 
             items_chunked = chunks(items, 10)
@@ -153,24 +190,28 @@ def transfer_data():
                     host_id = [h['hostid'] for h in items_chunk
                                if h['itemid'] == h_item['itemid']][-1]
 
-                    name = [h['name'] for h in items_chunk
-                            if h['itemid'] == h_item['itemid']][-1]
+                    groups_name = [h['groups']['name'] for h in hosts_chunk
+                                   if h['hostid'] == host_id]
+
+                    host_name = [h['name'] for h in hosts_chunk
+                                 if h['hostid'] == host_id][-1]
+
+                    item_name = [h['name'] for h in items_chunk
+                                 if h['itemid'] == h_item['itemid']][-1]
 
                     result = {
                         "host_id": host_id,
-                        "item_it": h_item['itemid'],
+                        "item_id": h_item['itemid'],
                         "value": h_item['value'],
                         "clock": h_item['clock'],
-                        "metric_name": name
+                        "metric_name": item_name,
+                        "group": groups,
+                        "host_name": host_name,
                     }
 
-                    log.debug(result)
+                    log.info(result)
                     producer.send(kafka_topic, result)
                     sended += 1
-
-            # block until all async messages are sent
-            # producer.flush()
-
 
         log.info("Pushed %s metrics" % sended)
         log.info("Last item time: %s" % result['clock'])
@@ -179,7 +220,6 @@ def transfer_data():
         # Decide what to do if produce request failed...
         log.exception()
         pass
-
 
 
 if __name__ == "__main__":
@@ -199,7 +239,3 @@ if __name__ == "__main__":
     ticker = threading.Event()
     while not ticker.wait(WAIT_TIME_SECONDS):
         transfer_data()
-
-
-
-
