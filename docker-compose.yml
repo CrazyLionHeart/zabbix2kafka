@@ -268,10 +268,22 @@ services:
    KAFKA_BROKERS: broker:9092
    KAFKA_TOPIC: zabbix
    ZBX_HOST: http://zabbix-web-nginx-pgsql
+   ZBX_LABEL: Zabbix Server 1
    ZBX_USER: Admin
    ZBX_PASSWD: zabbix
+   # KAFKA_PROTOCOL: SSL
+   # KAFKA_SSL_CA: /app/ca.cert
+   # KAFKA_SSL_CERT: /app/ssl.cert
+   # KAFKA_SSL_KEY: /app/ssl.key
+   # KAFKA_SSL_PASSWD: secret
   volumes:
    - up-flag:/data
+  #  - ./ca-cert:/app/ca.cert:ro
+  #  - ./sberradar-public-prod-1.key:/app/ssl.key
+  #  - ./sberradar-public-prod-1.cer:/app/ssl.cert
+  # extra_hosts:
+  #  - "broker2:192.168.11.1"
+  #  - "broker3:192.168.11.2"
 
 
 
