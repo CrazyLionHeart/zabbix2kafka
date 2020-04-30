@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # This program is dedicated to the public domain under the MIT license.
 
-from os import getenv
+from os import getenv, unsetenv
 import json
 import logging
 import sys
@@ -14,6 +14,7 @@ from kafka.errors import KafkaError
 
 from pyzabbix.api import ZabbixAPI
 
+import ssl
 
 try:
     import http.client as http_client
@@ -22,20 +23,11 @@ except ImportError:
     import httplib as http_client
 
 
-kafka_endpoint = getenv("KAFKA_BROKERS")
-kafka_topic = getenv("KAFKA_TOPIC")
-client_id = getenv("HOSTNAME")
-zabbix_host = getenv("ZBX_HOST")
-zabbix_login = getenv("ZBX_USER")
-zabbix_passwd = getenv("ZBX_PASSWD")
-WAIT_TIME_SECONDS = getenv("WAIT_TIME_SECONDS", 60)
-security_protocol=getenv("KAFKA_PROTOCOL", "PLAINTEXT")
-ssl_check_hostname=getnev("KAFKA_CHECK_HOSTNAME", False),
-ssl_cafile=getenv("KAFKA_SSL_CA")
-ssl_certfile=getnev("KAFKA_SSL_CERT")
-ssl_keyfile=getnev("KAFKA_SSL_KEY")
-ssl_password=getenv("KAFKA_SSL_PASSWD")
-
+def read_env(var):
+    result = getenv(var)
+    log.debug("Cleaning env %s", var)
+    unsetenv(var)
+    return result
 
 class NullHandler(logging.Handler):
     def emit(self, record):
@@ -52,11 +44,12 @@ def config_logging():
     """
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.WARN)
 
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(name)s %(filename)s:%(funcName)s:%(lineno)d | %(message)s")
 
+    # Enable debug HTTP request/response
     if root_logger.getEffectiveLevel() == logging.DEBUG:
         http_client.HTTPConnection.debuglevel = 1
     else:
@@ -107,6 +100,7 @@ def transfer_data():
             api_version=(1, 0, 0),
             compression_type='lz4',
             security_protocol=security_protocol,
+            ssl_context=ssl_context,
             ssl_check_hostname=ssl_check_hostname,
             ssl_cafile=ssl_cafile,
             ssl_certfile=ssl_certfile,
@@ -123,6 +117,7 @@ def transfer_data():
                 m.decode('utf-8')),
             session_timeout_ms=600000,
             security_protocol=security_protocol,
+            ssl_context=ssl_context,
             ssl_check_hostname=ssl_check_hostname,
             ssl_cafile=ssl_cafile,
             ssl_certfile=ssl_certfile,
@@ -144,6 +139,7 @@ def transfer_data():
         # Get all monitored hosts
         hosts = zapi.host.get(
             monitored_hosts=1,
+            selectGroups="extend",
             output=[
                 "hostid",
                 "groups",
@@ -190,8 +186,11 @@ def transfer_data():
                     host_id = [h['hostid'] for h in items_chunk
                                if h['itemid'] == h_item['itemid']][-1]
 
-                    groups_name = [h['groups']['name'] for h in hosts_chunk
+
+                    groups_list = [h['groups'] for h in hosts_chunk
                                    if h['hostid'] == host_id]
+
+                    groups = [g['name'] for g in groups_list[0]]
 
                     host_name = [h['name'] for h in hosts_chunk
                                  if h['hostid'] == host_id][-1]
@@ -207,9 +206,11 @@ def transfer_data():
                         "metric_name": item_name,
                         "group": groups,
                         "host_name": host_name,
+                        "zabbix_host": zabbix_host,
+                        "zabbix_name": zabbix_name
                     }
 
-                    log.info(result)
+                    log.debug(result)
                     producer.send(kafka_topic, result)
                     sended += 1
 
@@ -219,12 +220,30 @@ def transfer_data():
     except KafkaError:
         # Decide what to do if produce request failed...
         log.exception()
-        pass
+    except Exception:
+        # Do not break the loop
+        log.exception()
 
 
 if __name__ == "__main__":
 
     log = config_logging()
+
+    kafka_endpoint = read_env("KAFKA_BROKERS")
+    kafka_topic = read_env("KAFKA_TOPIC")
+    client_id = read_env("HOSTNAME")
+    zabbix_host = read_env("ZBX_HOST")
+    zabbix_name = read_env("ZBX_LABEL")
+    zabbix_login = read_env("ZBX_USER")
+    zabbix_passwd = read_env("ZBX_PASSWD")
+    WAIT_TIME_SECONDS = int(read_env("WAIT_TIME_SECONDS", 60))
+    security_protocol=read_env("KAFKA_PROTOCOL", "PLAINTEXT")
+    ssl_check_hostname=read_env("KAFKA_CHECK_HOSTNAME", False),
+    ssl_cafile=read_env("KAFKA_SSL_CA")
+    ssl_certfile=read_env("KAFKA_SSL_CERT")
+    ssl_keyfile=read_env("KAFKA_SSL_KEY")
+    ssl_password=read_env("KAFKA_SSL_PASSWD")
+    ssl_context=ssl._create_unverified_context()
 
     if kafka_endpoint:
         bootstrap_servers = kafka_endpoint.split(',')
@@ -235,6 +254,9 @@ if __name__ == "__main__":
     if not kafka_topic:
         raise Exception(
             "Kafka brokers does not set KAFKA_BROKERS: %s" % kafka_endpoint)
+
+    if not zabbix_name:
+        raise Exception("Set ZBX_LABEL for Zabbix server identify")
 
     ticker = threading.Event()
     while not ticker.wait(WAIT_TIME_SECONDS):
