@@ -23,8 +23,8 @@ except ImportError:
     import httplib as http_client
 
 
-def read_env(var):
-    result = getenv(var)
+def read_env(var, default=None):
+    result = getenv(var, default)
     log.debug("Cleaning env %s", var)
     unsetenv(var)
     return result
