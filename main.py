@@ -7,6 +7,8 @@ import json
 import logging
 import sys
 import threading
+from datetime import datetime
+import pytz
 
 
 from kafka import KafkaProducer, KafkaConsumer, TopicPartition
@@ -134,7 +136,9 @@ def transfer_data():
 
         latest_timestamp = get_latest_timestamp(kafka_topic)
 
-        log.info("Latest timestamp from kafka: %s" % latest_timestamp)
+        tz = pytz.timezone( 'Europe/Moscow' )
+
+        log.info("Latest timestamp from kafka: %s" % datetime.fromtimestamp(latest_timestamp, tz=tz))
 
         # Get all monitored hosts
         hosts = zapi.host.get(
@@ -215,7 +219,7 @@ def transfer_data():
                     sended += 1
 
         log.info("Pushed %s metrics" % sended)
-        log.info("Last item time: %s" % result['clock'])
+        log.info("Last item time: %s" % datetime.fromtimestamp(int(result['clock']), tz=tz))
 
     except KafkaError:
         # Decide what to do if produce request failed...
