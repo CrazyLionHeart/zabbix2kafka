@@ -221,12 +221,12 @@ def transfer_data():
         log.info("Pushed %s metrics" % sended)
         log.info("Last item time: %s" % datetime.fromtimestamp(int(result['clock']), tz=tz))
 
-    except KafkaError:
+    except KafkaError as ex:
         # Decide what to do if produce request failed...
-        log.exception()
-    except Exception:
+        log.exception(ex)
+    except Exception as ex:
         # Do not break the loop
-        log.exception()
+        log.exception(ex)
 
 
 if __name__ == "__main__":
