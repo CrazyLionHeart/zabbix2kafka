@@ -5,6 +5,8 @@ FROM python:3-slim
 ARG BUILD_DATE
 ARG BUILD_VERSION
 
+ENV DEBIAN_FRONTEND noninteractive
+
 LABEL \
   version="${BUILD_VERSION}" \
   maintainer="Alexander Sytar <sytar.alex@gmail.com>" \
@@ -21,12 +23,13 @@ LABEL \
 # -----------------------------------------------------------------------------
 
 RUN apt-get update \
-  && apt-get install -y python3-snappy
+  && apt-get install -y python3-snappy dumb-init
 
 WORKDIR /app
 
-COPY ./requirements.txt .
+COPY ./requirements.txt ./docker-entrypoint.sh /app/
 RUN pip install --no-cache-dir -r requirements.txt \
+  && chmod +x /app/docker-entrypoint.sh \
   && rm -Rf /root/.cache \
   && find . -type d -name __pycache__ -exec rm -r {} \+
 
@@ -34,7 +37,9 @@ ENV PYTHONUNBUFFERED 1
 
 COPY main.py .
 
-ENTRYPOINT ["python", "main.py"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+
+CMD ["python", "main.py"]
 
 HEALTHCHECK \
   --interval=5s \

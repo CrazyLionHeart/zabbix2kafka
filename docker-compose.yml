@@ -163,7 +163,7 @@ services:
   user: root
   stop_grace_period: 1m
   healthcheck:
-   test: ["CMD-SHELL", "pg_isready -U postgres"]
+   test: ["CMD", "pg_isready -U postgres"]
    interval: 10s
    timeout: 5s
    retries: 5
@@ -203,32 +203,14 @@ services:
   volumes:
    - ./kafka:/var/lib/kafka/data:rw
    - up-flag:/data
+   - ./kafka_entrypoint.sh:/docker-entrypoint.sh
+  stop_signal: SIGHUP
   stop_grace_period: 1m
   links:
    - zookeeper
   ports:
     - "9092:9092"
-  command: 
-    - bash 
-    - -c 
-    - |
-      rm -f /data/kafka-is-up
-      # Launch Kafka
-      /etc/confluent/docker/run &
-      # Wait for Kafka to start and then create a file to 
-      # indicate that it's listening
-      echo "Waiting for Kafka to start listening on 9092 ⏳"
-      nc -vz localhost 9092
-      is_up=$$?
-      while [ $$is_up -ne 0 ] ; do 
-        echo -e $$(date) $$(nc -z localhost 9092)
-        nc -vz localhost 9092
-        is_up=$$?
-        sleep 5 
-      done
-      echo "Kakfa is now listening! :-)"
-      touch /data/kafka-is-up
-      sleep infinity
+  entrypoint: ["bash", "/docker-entrypoint.sh"]
   healthcheck:
    test: ["CMD", "bash", "-c", "unset" , "JMX_PORT" ,";" ,"kafka-topics.sh","--zookeeper","zookeeper:2181","--list"]
   env_file:
@@ -251,19 +233,6 @@ services:
   depends_on:
    - kafka
    - zabbix-web-nginx-pgsql
-  entrypoint: /bin/bash -c "/bin/bash -c \"$${@}\""
-  command: 
-   - bash 
-   - -c 
-   - |
-     echo "Waiting for flag that Kafka is up… ⏳"
-     until [ -f /data/kafka-is-up ]
-     do
-         echo -e $$(date) ": Waiting for flag that Kafka is up… ⏳"
-         sleep 5
-     done
-     echo -e $$(date) ": \o/ Got the flag that Kafka is up!"
-     python main.py
   environment:
    KAFKA_BROKERS: broker:9092
    KAFKA_TOPIC: zabbix
@@ -271,6 +240,7 @@ services:
    ZBX_LABEL: Zabbix Server 1
    ZBX_USER: Admin
    ZBX_PASSWD: zabbix
+   # DEBUG: true
    # KAFKA_PROTOCOL: SSL
    # KAFKA_SSL_CA: /app/ca.cert
    # KAFKA_SSL_CERT: /app/ssl.cert
