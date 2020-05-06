@@ -44,7 +44,7 @@ def config_logging():
     """
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.WARN)
+    root_logger.setLevel(logging.INFO)
 
     formatter = logging.Formatter(
         "[%(asctime)s][%(levelname)s] %(name)s %(filename)s:%(funcName)s:%(lineno)d | %(message)s")
